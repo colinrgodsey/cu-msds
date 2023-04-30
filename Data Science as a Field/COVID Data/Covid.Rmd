@@ -1,0 +1,148 @@
+---
+title: "COVID Data"
+author: "C. Godsey"
+date: "2023-04-01"
+output:
+  pdf_document: default
+  html_document: default
+  word_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(lubridate)
+```
+
+# Introduction
+
+We're going to explore the current COVID-19 data for the purpose of uncovering any interesting trends. Our focus for this article
+will be on the change in mortality over time. Much of the focus early on in COVID was on controlling transfer and new cases, but regardless of the number of new cases at any point, there should be important data on the mortality associated with however
+many cases there are.
+
+## Covid 19 Data
+
+```{r covid19, message=FALSE}
+#url_base <- 'https://github.com/CSSEGISandData/COVID-19/raw/master/csse_covid_19_data/csse_covid_19_time_series/'
+#files <- c("time_series_covid19_confirmed_US.csv",  "time_series_covid19_confirmed_global.csv", "time_series_covid19_deaths_US.csv",  "time_series_covid19_deaths_global.csv")
+#urls <- str_c(url_base, files)
+#US_cases_raw <- read_csv(urls[1])
+#global_cases_raw <- read_csv(urls[2])
+#US_deaths_raw <- read_csv(urls[2])
+#global_deaths_raw <- read_csv(urls[3])
+
+global_deaths_raw <- read_csv('https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_deaths_global.csv')
+global_cases_raw <- read_csv('https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_confirmed_global.csv')
+```
+
+### Tidy and Preprocess the Data
+
+We transform the columnar date data to provide total number of cases and deaths per area.
+
+```{r tidy, message=FALSE}
+global_cases <- global_cases_raw %>% 
+  select(-c(Lat, Long)) %>%
+  rename(Province_State = `Province/State`, Country_Region = `Country/Region`) %>%
+  pivot_longer(cols = -c(Province_State, Country_Region),
+               names_to = 'Date', values_to = 'Cases') %>%
+  mutate(Date = mdy(Date))
+
+global_deaths <- global_deaths_raw %>% 
+  select(-c(Lat, Long)) %>%
+  rename(Province_State = `Province/State`, Country_Region = `Country/Region`) %>%
+  pivot_longer(cols = -c(Province_State, Country_Region),
+               names_to = 'Date', values_to = 'Deaths') %>%
+  mutate(Date = mdy(Date))
+```
+
+### Merge the Data and Engineer our Fatality Value
+
+Now we want to merge the disparate cases and deaths datasets to a single dataset. The average time to death since COVID infection is 3 weeks. We offset the case dates by 21 days so we can more accurately compute a fatality per case ratio, as we're interested in the deaths related to roughly the time when COVID was contracted. With these merged datasets, we're able to computer the death/case (fatality) ratio. We are filtering out just the major geographic areas, to help account for a situation we'll explain in the next graph. 
+
+```{r prepare, message=FALSE}
+global <- global_cases %>% 
+  mutate(Date = Date + days(21)) %>%
+  full_join(global_deaths) %>%
+  filter(Country_Region %in% c('US', 'India', 'China', 'Indonesia')) %>%
+  summarise(.by = c(Country_Region, Date), Cases = sum(Cases), Deaths = sum(Deaths)) %>%
+  mutate(Death_Per_Case = Deaths/Cases) %>%
+  filter(Death_Per_Case < 1)
+global[sapply(global, is.infinite)] <- NA
+
+summary(global)
+```
+# Exploration
+
+We started by first exploring the global fatality rate. As you can see in the following graph, there are two peaks in fatality. There are many possible causes for this, but we'll showcase the source in the next graph.
+
+```{r plot total, echo=FALSE}
+global %>%
+  summarise(.by = c('Date'), Cases = sum(Cases), Deaths = sum(Deaths)) %>%
+  mutate(Death_Per_Case = Deaths/Cases) %>%
+  ggplot(aes(x = Date)) +
+  geom_line(aes(y = Death_Per_Case)) +
+  geom_point(aes(y = Death_Per_Case)) +
+  labs(title = "Global Fatality Ratio")
+```
+So as we can see, there is definitely an exponential decrease in mortality rate over time. But as you might notice, we have these two peaks. With the obvious decrease, having a natural second spike in mortality does not make a lot of sense, and the data does not look continuous. We do know, historically, that COVID did not start to spread in every area at the same time. Each country had their own initial onset of infection, so lets take a look at each of these 4 most popular countries separately.
+
+```{r plot percountry, echo=FALSE}
+global %>%
+  ggplot(aes(x = Date)) +
+  geom_line(aes(y = Death_Per_Case, group = Country_Region, color = Country_Region)) +
+  geom_point(aes(y = Death_Per_Case, group = Country_Region, color = Country_Region)) +
+  labs(title = "Global Fatality Rate by Country")
+```
+
+When looking at the data for these 4 countries separately, we can see a much more reasonable pattern. The decrease in mortality is in fact exponential, and the two spikes we saw in the first graph are just due to the time in which each country had their initial outbreaks. So accounting for that, we can see a very clear and continuous drop in fatality over time, and the drop in fatality is similar in relation to the date of the initial outbreak.
+
+While the decay in fatality is similar in relation, there are some subtle differences in the decay. So next, we're going to take a look at modeling each country independently. The US has a large population and has been rather diligent about reporting data, so we'll model the US.
+
+# The US Fatality
+
+Let's look at the US data, and we'll trim off the first few months of data to get a cleaner visual. We also plot the graph logarithmically so we can better view the quality beyond the exponential nature of the data.
+
+```{r plot us, echo=FALSE}
+cutoff_date <- date('2020-04-01')
+filtered_us_data <- global %>%
+  filter(Country_Region == 'US', Date > cutoff_date) %>%
+  mutate(Days = as.numeric(difftime(Date, cutoff_date, unit='days')))
+filtered_us_data %>%
+  mutate(Death_Per_Case = log(Death_Per_Case)) %>%
+  ggplot(aes(x = Days)) +
+  geom_line(aes(y = Death_Per_Case, group = Country_Region, color = Country_Region)) +
+  geom_point(aes(y = Death_Per_Case, group = Country_Region, color = Country_Region)) +
+  labs(title = "Global Fatality Ratio in the US after 2020-04-01 (log)")
+```
+
+The data does have some qualities outside of the simple logarithmic property. The remaining characteristics do not seem continuous, so let's just create a logarithmic model of the data.
+
+```{r model}
+model <- lm(data=filtered_us_data, Death_Per_Case ~ log(Days))
+summary(model)
+```
+
+```{r prediction}
+filtered_us_data %>%
+  mutate(Prediction = predict(model)) %>%
+  ggplot(aes(x = Days)) +
+  geom_line(aes(y = Death_Per_Case, color="Death_Per_Case")) +
+  geom_point(aes(y = Death_Per_Case, color="Death_Per_Case")) +
+  geom_line(aes(y = Prediction, color="Prediction")) +
+  geom_point(aes(y = Prediction, color="Prediction")) +
+  labs(title = "Global Fatality Rate in the US after 2020-04-01")
+```
+
+The model seems to roughly model the logarithmic nature in the data, but there some specific nuances that are not reflected in the general model. This makes sense as this pandemic was punctuated by several discrete events that could have had a large impact on mortality, such as: immunity, vaccination, lockdowns, and changes in treatment.
+
+# Conclusion
+
+In this article, we explored an area of the COVID data that is not often explored. It shows the surprising ability of a human population to adapt to a major outbreak. Advances in medical technology and the increase in immunity can allow a population to adapt and overcome fatality even as the diseases grows and spreads further.
+
+## Bias
+
+The article was produced with a conscious awareness of potential bias. We have avoided drawing any firm conclusions as to why the fatality rate dropped over time and instead chose to identify the trend itself and point to some possible causal elements. There is also a chance that this trend reflects changes in testing and infection identification, and may not truly reflect the changes in mortality.
+
+```{r sessioninfo, echo=FALSE}
+sessionInfo()
+```

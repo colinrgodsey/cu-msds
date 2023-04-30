@@ -1,0 +1,138 @@
+---
+title: "NYPD Shooting Data"
+author: "C. Godsey"
+date: "2023-04-01"
+output:
+  pdf_document: default
+  html_document: default
+  word_document: default
+---
+
+```{r setup, include=FALSE, message=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(lubridate)
+```
+
+# NYPD Shooting Trends
+
+## Introduction
+
+We're going to explore the provided data to see if we can identify any interesting trends in NYC shootings.
+
+## Data
+
+We're using a [data set](https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv?accessType=DOWNLOAD) published by the city of New York that gives per-incident shooting data for the entire city over several years. Here is a sample of the raw data:
+
+```{r nypddata, message=FALSE}
+url <- "https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv?accessType=DOWNLOAD"
+shooting_data_raw_csv <- read_csv(url)
+head(shooting_data_raw_csv)
+```
+
+## Tidy
+We tidy the data to include more specific temporal information. We aggregate the data to provide the number of incidents per month and year, as well as the month within the year.
+
+```{r data typing}
+shooting_data_raw <- shooting_data_raw_csv %>%
+  mutate(OCCUR_DATE = mdy(OCCUR_DATE)) %>%
+  mutate(MONTH_DATE = floor_date(OCCUR_DATE, "month"),
+         MONTH = month(OCCUR_DATE))
+invisible(shooting_data_raw)
+summary(shooting_data_raw)
+
+```
+
+Here is some data that shows the aggregate incident count for each month in a year:
+
+```{r tidy}
+shooting_data_by_boro <- shooting_data_raw %>%
+  summarise(.by = c(MONTH_DATE, BORO), INCIDENTS = n()) %>%
+  arrange(MONTH_DATE) %>%
+  mutate(NEW_INCIDENTS = INCIDENTS - lag(INCIDENTS))
+
+shooting_data <- shooting_data_by_boro %>%
+  summarise(.by = MONTH_DATE, INCIDENTS = sum(INCIDENTS))
+            
+print(shooting_data)
+```
+
+## Explore
+
+We plot this data per borough to see if there's anything interesting there:
+
+```{r plot boro, echo=FALSE}
+shooting_data_by_boro %>%
+  ggplot(aes(x = MONTH_DATE)) +
+  geom_line(aes(y = INCIDENTS, group=BORO, color = BORO)) +
+  geom_point(aes(y = INCIDENTS, group=BORO, color = BORO)) +
+  labs(title = "NYPD Shooting Data by Borough")
+
+```
+Ultimately all boroughs seem to follow a similar cyclic pattern over time. Let's look at the aggregate data for the entire city:
+
+```{r plot total, echo=FALSE}
+shooting_data %>%
+  ggplot(aes(x = MONTH_DATE)) +
+  geom_line(aes(y = INCIDENTS)) +
+  geom_point(aes(y = INCIDENTS)) +
+  labs(title = "NYPD Shooting Data")
+```
+
+# Analysis
+
+We can more clearly see that there is indeed a yearly cycle. Shootings seem to happen the most in summer! Let's look at all years aggregated together (as the mean) to see the number of incidents per month. Let's also normalize this data, as at this point, we're interested in the relative difference for the months. Instead of aggregating on month of year, we'll aggregate on day of year.
+
+```{r data by month}
+shooting_data_by_yday <- shooting_data_raw %>%
+  mutate(MONTH = month(OCCUR_DATE), YEAR_DAY = yday(OCCUR_DATE)) %>%
+  summarise(.by = c(YEAR_DAY), INCIDENTS = n()) %>%
+  arrange(YEAR_DAY) %>%
+  mutate(MONTH_FLOAT = YEAR_DAY/365*12) %>%
+  mutate(INCIDENTS = INCIDENTS-mean(INCIDENTS))
+```
+``````{r data by month plot, echo=FALSE}
+shooting_data_by_yday %>%
+  ggplot(aes(x = MONTH_FLOAT)) +
+  geom_line(aes(y = INCIDENTS)) +
+  geom_point(aes(y = INCIDENTS)) +
+  labs(title = "NYPD Shooting Data by Month (normalized)")
+```
+
+# Model
+
+This definitely seems to show that shootings happen more often in the summer! Let's model the monthly data using a 4th order polynomial regression model.
+
+```{r model}
+model <- lm(data=shooting_data_by_yday, 
+            INCIDENTS ~ MONTH_FLOAT + I(MONTH_FLOAT^2) + 
+              I(MONTH_FLOAT^3) + I(MONTH_FLOAT^4))
+
+predictions <- model %>% predict(shooting_data_by_yday)
+```
+```{r model plot, echo=FALSE}
+shooting_data_by_yday %>%
+  mutate(PREDICTION=predict(model)) %>%
+  ggplot(aes(x = MONTH_FLOAT)) +
+  geom_line(aes(y = INCIDENTS, color="INCIDENTS", group="INCIDENTS")) +
+  geom_point(aes(y = INCIDENTS, color="INCIDENTS", group="INCIDENTS")) +
+  geom_line(aes(y = PREDICTION, color="PREDICTION", group="PREDICTION")) +
+  geom_point(aes(y = PREDICTION, color="PREDICTION", group="PREDICTION")) +
+  labs(title = "NYPD Shooting Data by Month w/ Model  (normalized)")
+```
+
+The model seems good! Let's print the coefficients so we can successfully model the relative difference in shootings per month for the city of New York.
+
+```{r model values, echo=FALSE}
+summary(model)
+```
+
+# Conclusion
+
+We definitely see a cyclic pattern in shootings in NYC, with them most often to occur in summer. This model should help to show relative difference in shootings from month to month. The model will effectively provide a scalar value that can be used to forecast shootings. For example, if you know the shooting count in January of this year, you can use the model to get the scale between January and whatever month you are interested in. If `n` is the number of shootings by the end of January, the forecast for February's total shootings can be obtained with `y = n * f(2)/f(1)`.
+
+Bias may have occurred in this analysis based on the author's prior knowledge of cyclic patterns in murders. This may have unduly influenced the course of analysis in this project.
+
+```{r sessioninfo, echo=FALSE}
+sessionInfo()
+```
