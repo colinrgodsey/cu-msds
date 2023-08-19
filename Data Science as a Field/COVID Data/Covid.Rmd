@@ -16,7 +16,7 @@ library(lubridate)
 
 # Introduction
 
-We're going to explore the current COVID-19 data for the purpose of uncovering any interesting trends. Our focus for this article
+We're going to explore the current COVID-19 data provided by the John Hopkins github for the purpose of uncovering any interesting trends. Our focus for this article
 will be on the change in mortality over time. Much of the focus early on in COVID was on controlling transfer and new cases, but regardless of the number of new cases at any point, there should be important data on the mortality associated with however
 many cases there are.
 
